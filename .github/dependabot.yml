@@ -5,10 +5,10 @@
 
 version: 2
 updates:
-  # Maintain dependencies for Python
-  - package-ecosystem: "pip"
+  # Maintain dependencies for TypeScript
+  - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "daily"
     ignore:
-      - dependency-name: "xalpha"
+      - dependency-name: "lodash"
