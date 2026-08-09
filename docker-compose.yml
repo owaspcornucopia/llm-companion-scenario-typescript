@@ -1,0 +1,60 @@
+services:
+  # Downloader job: fetch artifacts once and let everyone admire the shared folders.
+  downloader:
+    image: python:3.11-slim
+    volumes:
+      - ./TinyLlama-1.1B-Chat-v1.0:/models/TinyLlama-1.1B-Chat-v1.0
+      - ./pwnednext-tinyllama-lora-sql-adapter:/models/pwnednext-tinyllama-lora-sql-adapter
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+    # Skip repeat downloads, because bandwidth is expensive even when ego is not.
+    command: >
+      sh -c "pip install -q huggingface_hub &&
+      (test -f /models/TinyLlama-1.1B-Chat-v1.0/config.json || hf download TinyLlama/TinyLlama-1.1B-Chat-v1.0 --local-dir /models/TinyLlama-1.1B-Chat-v1.0) &&
+      (test -f /models/pwnednext-tinyllama-lora-sql-adapter/adapter_config.json || hf buckets sync hf://buckets/steephole5586/pwnednext-tinyllama-lora-sql-adapter /models/pwnednext-tinyllama-lora-sql-adapter)"
+
+  # Model service: points at TinyLlama plus the adapter and serves inference on port 9001.
+  model:
+    build: .
+    ports:
+      - "9001:9001"
+    volumes:
+      - ./TinyLlama-1.1B-Chat-v1.0:/models/TinyLlama-1.1B-Chat-v1.0
+      - ./pwnednext-tinyllama-lora-sql-adapter:/models/pwnednext-tinyllama-lora-sql-adapter
+    cpus: "8"
+    mem_limit: 12g
+    command: npm run start:model
+    environment:
+      - MODEL_PATH=/models/TinyLlama-1.1B-Chat-v1.0
+      - ADAPTER_PATH=/models/pwnednext-tinyllama-lora-sql-adapter
+    depends_on:
+      downloader:
+        condition: service_completed_successfully
+
+  # App service: scaled Express workers that proxy LLM work and hit shared SQLite.
+  app:
+    build: .
+    expose:
+      - "9000"
+    command: npm start
+    volumes:
+      - app-db:/data
+    environment:
+      - MODEL_SERVICE_URL=http://model:9001
+      - DB_CONNECTION_STRING=/data/db.sqlite
+    depends_on:
+      - model
+
+  # Nginx front door: accepts traffic and fans it out to app replicas.
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "9000:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app
+
+volumes:
+  # Named volume so every app replica can point at the same SQLite file.
+  app-db:

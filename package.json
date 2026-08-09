@@ -1,0 +1,26 @@
+{
+  "name": "pwnednext-typescript",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "start": "tsx src/server.ts",
+    "start:model": "tsx src/model-service.ts",
+    "test": "vitest run --coverage"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "express": "^4.21.2",
+    "tsx": "^4.23.11"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.13.10",
+    "@types/supertest": "^6.0.2",
+    "@vitest/coverage-v8": "^3.0.7",
+    "supertest": "^7.1.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.7"
+  }
+}

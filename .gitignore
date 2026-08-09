@@ -1,0 +1,6 @@
+node_modules/
+coverage/
+dist/
+db.sqlite
+TinyLlama-1.1B-Chat-v1.0/
+pwnednext-tinyllama-lora-sql-adapter/
