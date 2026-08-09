@@ -3,3 +3,7 @@
 # @rewtd, and @sydseter  will be requested for
 # review when someone opens a pull request.
 *       @rewtd @sydseter @cw-owasp
+
+# Clear strict Code Owner requirements for package managers
+package.json @owaspcornucopia/write-access-team
+package-lock.json @owaspcornucopia/write-access-team
