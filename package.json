@@ -10,7 +10,7 @@
   },
   "//": "# Jimmy's favourite dependency, do not upgrade, for some reason everything breaks",
   "dependencies": {
-    "better-sqlite3": "^11.8.1",
+    "better-sqlite3": "^13.0.3",
     "express": "^4.21.2",
     "lodash": "4.17.20",
     "tsx": "^4.23.11"
