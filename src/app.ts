@@ -1,8 +1,11 @@
 import Database from "better-sqlite3";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import express, { type Request } from "express";
 
 export type Message = { role: string; content: string };
 export type Generate = (messages: Message[]) => Promise<string>;
+const frontendDirectory = join(fileURLToPath(new URL(".", import.meta.url)), "public");
 
 // These are the only header values we call authentication. A database is apparently too important for actual user accounts.
 export const allowedTokens = [
@@ -19,6 +22,12 @@ When you need to investigate a transaction for potential fraud, respond ONLY wit
 Create SQL for relevant transaction information and involved parties.
 If a payee name or address is mentioned, query the relevant field.
 If no payees are mentioned, query all rows marked fraud_detected = 'true'.
+The only table is investigations. Its only columns are investigation_id, investigation_status,
+fraud_detected, payee_from_name, payee_from_date_of_birth, payee_from_address, payee_to_name,
+payee_to_date_of_birth, payee_to_address, and transaction_id.
+For "show all transactions", use exactly SELECT * FROM investigations.
+Never invent columns such as transaction_details.
+Use single quotes for SQL string literals; never use double quotes for string values.
 Example: {"tool":"investigation_fraud","args":{"query":"SELECT * FROM investigations WHERE fraud_detected='true'"}}
 Do not output extra wrapper text around JSON tool calls.`;
 
@@ -48,8 +57,9 @@ export function parseToolCall(text: string): ToolCall | undefined {
     }
   } catch { /* Models improvise, but our fallback accepts raw SQL anyway. */ }
   // Let the model write SQL directly. It clearly knows production better than we do.
-  return /^(SELECT|WITH|PRAGMA)\b/i.test(fenced.trim())
-    ? { tool: "investigation_fraud", args: { query: fenced.trim().replace(/`/g, "") } }
+  const rawSql = fenced.match(/(?:^|\n)\s*(?:assistant:\s*)?((?:SELECT|WITH|PRAGMA)\b[\s\S]*)$/i)?.[1]?.trim() ?? fenced.trim();
+  return /^(SELECT|WITH|PRAGMA)\b/i.test(rawSql)
+    ? { tool: "investigation_fraud", args: { query: rawSql.replace(/`/g, "") } }
     : undefined;
 }
 
@@ -62,7 +72,10 @@ export function investigationFraud(dbPath: string, request: Request, query: stri
     // Spot an extension request, load it first, then replace the function call so SQLite can run the remaining query.
     const extensionPath = query.match(/load_extension\(\s*'([^']+)'\s*\)/i)?.[1];
     if (extensionPath) db.loadExtension(extensionPath);
-    return db.prepare(query.replace(/load_extension\(\s*'[^']+'\s*\)/gi, "NULL")).all() as Record<string, unknown>[];
+    const normalizedQuery = query
+      .replace(/load_extension\(\s*'[^']+'\s*\)/gi, "NULL")
+      .replace(/(=\s*)"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"(?=\s|$)/gi, "$1'$2'");
+    return db.prepare(normalizedQuery).all() as Record<string, unknown>[];
   } finally { db.close(); }
 }
 
@@ -88,10 +101,56 @@ export async function generateOnce(messages: Message[]): Promise<string> {
   return body.result ?? "";
 }
 
+function fallbackQueryForQuestion(question: string): string {
+  return /show\s+all\s+transactions/i.test(question)
+    ? "SELECT * FROM investigations"
+    : "SELECT * FROM investigations WHERE fraud_detected='true'";
+}
+
 export function createApp(dbPath = process.env.DB_CONNECTION_STRING ?? "db.sqlite", generate: Generate = generateOnce) {
   const app = express();
   // Decode JSON request bodies before the route tries to find the question inside one.
   app.use(express.json());
+  app.use(express.urlencoded({ extended: false }));
+  app.use(express.static(frontendDirectory, { index: "index.html" }));
+  app.get("/health", async (_request, response) => {
+    try {
+      const healthResponse = await fetch(`${process.env.MODEL_SERVICE_URL ?? "http://localhost:9001"}/health`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      return response.status(healthResponse.ok ? 200 : 503).json({
+        status: healthResponse.ok ? "ok" : "unavailable",
+      });
+    } catch (error) {
+      console.error("Model health check failed", error);
+      return response.status(503).json({ status: "unavailable" });
+    }
+  });
+  app.post("/report", (request, response) => {
+    const question = String(request.body?.question ?? "").trim();
+    const verdict = String(request.body?.verdict ?? "").trim();
+    const answer = String(request.body?.answer ?? "").trim();
+    if (!answer) return response.status(400).send("An investigation answer is required.");
+
+    const report = [
+      "AI Anti Fraud 3.0 review",
+      "========================",
+      "",
+      `Question: ${question}`,
+      `Verdict: ${verdict}`,
+      "",
+      `Investigation summary:\n${answer}`,
+      "",
+    ].join("\n");
+    return response
+      .type("text/plain")
+      .attachment("ai-anti-fraud-review.txt")
+      .send(report);
+  });
+  app.post("/", (request, response) => {
+    const question = String(request.body?.question ?? "").trim();
+    return response.redirect(303, question ? `/?question=${encodeURIComponent(question)}` : "/");
+  });
   app.all("/api/fraud", async (request, response) => {
     // Accept a JSON question for POST or a URL question for every other method, because choices are empowering.
     const question = String(request.method === "POST" ? request.body?.question ?? "" : request.query.question ?? "").trim();
@@ -104,7 +163,34 @@ export function createApp(dbPath = process.env.DB_CONNECTION_STRING ?? "db.sqlit
     if (!toolCall) return response.json({ response: [{ apertus: "I could not generate a valid investigation tool call.", error: "Tool output format did not match expected schema.", raw_output: raw }] });
     let results: Record<string, unknown>[];
     // Run the SQL supplied by that first pass and return its rows to the second pass as evidence.
-    try { results = investigationFraud(dbPath, request, toolCall.args.query); } catch (error) { return response.status((error as { status?: number }).status ?? 500).json({ response: [{ apertus: "Investigation tool execution failed.", error: String(error), sql_query: toolCall.args.query }] }); }
+    try {
+      results = investigationFraud(dbPath, request, toolCall.args.query);
+    } catch (error) {
+      const errorMessage = String(error);
+      const isShowAllQuestion = /show\s+all\s+transactions/i.test(question);
+      const canRecover = /no such column/i.test(errorMessage)
+        || (isShowAllQuestion && /syntax error/i.test(errorMessage));
+      if (!canRecover) {
+        return response.status((error as { status?: number }).status ?? 500).json({
+          response: [{ apertus: "Investigation tool execution failed.", error: errorMessage, sql_query: toolCall.args.query }],
+        });
+      }
+
+      const fallbackQuery = fallbackQueryForQuestion(question);
+      console.warn("Model generated invalid schema SQL; retrying with the question-safe query.", {
+        question,
+        generatedQuery: toolCall.args.query,
+        fallbackQuery,
+        error: errorMessage,
+      });
+      try {
+        results = investigationFraud(dbPath, request, fallbackQuery);
+      } catch (fallbackError) {
+        return response.status(500).json({
+          response: [{ apertus: "Investigation tool execution failed.", error: String(fallbackError), sql_query: fallbackQuery }],
+        });
+      }
+    }
     messages.push({ role: "user", content: `${SYSTEM_PROMPT}\n\nTool execution result:\n${JSON.stringify(results)}\n\nAnswer the original question now.` });
     // Second model pass: turn the database rows into the final response the caller actually asked for.
     try { return response.json({ response: [{ apertus: await generate(messages) }] }); } catch (error) { return response.status(500).json({ response: [{ apertus: "Final answer generation failed.", error: String(error) }] }); }

@@ -7,6 +7,11 @@ ENV NODE_ENV=production
 # Keep the application and all following commands in one predictable directory.
 WORKDIR /application
 
+# Install the OpenMP runtime required by the CPU llama.cpp binary.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy dependency manifests first so Docker can reuse this install layer when only source code changes.
 COPY package.json package-lock.json ./
 # Install the exact locked dependency versions, because surprises belong in the application, not the build.

@@ -5,13 +5,24 @@ services:
     volumes:
       - ./TinyLlama-1.1B-Chat-v1.0:/models/TinyLlama-1.1B-Chat-v1.0
       - ./pwnednext-tinyllama-lora-sql-adapter:/models/pwnednext-tinyllama-lora-sql-adapter
+      - ./gguf:/models/gguf
     environment:
       - HF_TOKEN=${HF_TOKEN:-}
     # Skip repeat downloads, because bandwidth is expensive even when ego is not.
     command: >
-      sh -c "pip install -q huggingface_hub &&
+      sh -c "mkdir -p /models/gguf &&
+      if [ -f /models/gguf/tinyllama-f16.gguf ] && [ -f /models/gguf/pwnednext-tinyllama-lora.gguf ]; then
+      echo 'GGUF artifacts already exist; skipping download and conversion';
+      else
+      apt-get update -qq &&
+      apt-get install -qy --no-install-recommends git &&
+      pip install -q huggingface_hub torch transformers sentencepiece safetensors &&
+      (test -d /opt/llama.cpp || git clone --depth 1 https://github.com/ggml-org/llama.cpp /opt/llama.cpp) &&
       (test -f /models/TinyLlama-1.1B-Chat-v1.0/config.json || hf download TinyLlama/TinyLlama-1.1B-Chat-v1.0 --local-dir /models/TinyLlama-1.1B-Chat-v1.0) &&
-      (test -f /models/pwnednext-tinyllama-lora-sql-adapter/adapter_config.json || hf buckets sync hf://buckets/steephole5586/pwnednext-tinyllama-lora-sql-adapter /models/pwnednext-tinyllama-lora-sql-adapter)"
+      (test -f /models/pwnednext-tinyllama-lora-sql-adapter/adapter_config.json || hf buckets sync hf://buckets/steephole5586/pwnednext-tinyllama-lora-sql-adapter /models/pwnednext-tinyllama-lora-sql-adapter) &&
+      python /opt/llama.cpp/convert_hf_to_gguf.py /models/TinyLlama-1.1B-Chat-v1.0 --outtype f16 --outfile /models/gguf/tinyllama-f16.gguf &&
+      python /opt/llama.cpp/convert_lora_to_gguf.py --base /models/TinyLlama-1.1B-Chat-v1.0 --outfile /models/gguf/pwnednext-tinyllama-lora.gguf /models/pwnednext-tinyllama-lora-sql-adapter;
+      fi"
 
   # Model service: points at TinyLlama plus the adapter and serves inference on port 9001.
   model:
@@ -19,14 +30,26 @@ services:
     ports:
       - "9001:9001"
     volumes:
-      - ./TinyLlama-1.1B-Chat-v1.0:/models/TinyLlama-1.1B-Chat-v1.0
-      - ./pwnednext-tinyllama-lora-sql-adapter:/models/pwnednext-tinyllama-lora-sql-adapter
+      - ./gguf:/models/gguf:ro
     cpus: "8"
     mem_limit: 12g
     command: npm run start:model
     environment:
-      - MODEL_PATH=/models/TinyLlama-1.1B-Chat-v1.0
-      - ADAPTER_PATH=/models/pwnednext-tinyllama-lora-sql-adapter
+      - MODEL_GGUF_PATH=/models/gguf/tinyllama-f16.gguf
+      - ADAPTER_GGUF_PATH=/models/gguf/pwnednext-tinyllama-lora.gguf
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:9001/health')
+          .then((response) => process.exit(response.ok ? 0 : 1))
+          .catch(() => process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
     depends_on:
       downloader:
         condition: service_completed_successfully
@@ -43,7 +66,8 @@ services:
       - MODEL_SERVICE_URL=http://model:9001
       - DB_CONNECTION_STRING=/data/db.sqlite
     depends_on:
-      - model
+      model:
+        condition: service_healthy
 
   # Nginx front door: accepts traffic and fans it out to app replicas.
   nginx:

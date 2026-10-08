@@ -1,6 +1,7 @@
 # Exclude model artifacts from build context to keep laptop builds lightweight.
 TinyLlama-1.1B-Chat-v1.0/
 pwnednext-tinyllama-lora-sql-adapter/
+gguf/
 
 # Exclude local/cache artifacts.
 node_modules/
