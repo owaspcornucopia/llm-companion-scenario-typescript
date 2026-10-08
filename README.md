@@ -13,13 +13,23 @@ You are those junior developers and testers.
 
 ## High-Level Architecture of AI Anti-Fraud 3.0
 
-![Architecture sequence diagram](https://raw.githubusercontent.com/owaspcornucopia/llm-companion-scenario/refs/heads/main/architecture-sequence-diagram.svg)
+![Architecture sequence diagram](/diagrams/sequence-diagram.png)
 
-![Threat model](https://raw.githubusercontent.com/owaspcornucopia/llm-companion-scenario/refs/heads/main/ThreatDragonModels/threatmodel.png)
+![Threat model](/ThreatDragonModels/threatmodel.png)
 
 Threat model template: [OWASP Threat Dragon EoP Games DFD](ThreatDragonModels/threatmodel.json)
 
-AI Anti-Fraud 3.0 is deployed as a small microservice system. It separates request handling, model inference, and supporting services so the application can be scaled.
+The AI Anti-Fraud 3.0 is deployed as a small microservice system. It separates request handling, model inference, and supporting services so the application can be scaled and threat-modeled more easily.
+
+## Screenshots Frontend
+
+Awaiting investigation:
+
+![Ready for requests](/images/screenshot1.png)
+
+Investigation complete:
+
+![Waiting for an answer](/images/screenshot2.png)
 
 ### AI Anti-Fraud 3.0 Components
 
